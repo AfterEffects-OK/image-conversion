@@ -1,673 +1,727 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-
-// Main App component
-const App = () => {
-    // State variables for application data and UI
-    const [selectedFiles, setSelectedFiles] = useState([]); // Stores files selected by the user, now including thumbnail URLs and original dimensions
-    const [convertedImages, setConvertedImages] = useState([]); // Stores URLs of converted images
-    const [outputFormat, setOutputFormat] = useState('jpeg'); // 'jpeg', 'png', or 'webp'
-    const [resizeWidth, setResizeWidth] = useState(''); // Desired width for resizing
-    const [resizeHeight, setResizeHeight] = useState(''); // Desired height for resizing
-    const [maintainAspectRatio, setMaintainAspectRatio] = useState(true); // Flag to maintain aspect ratio during resize
-    const [compressionQuality, setCompressionQuality] = useState(0.8); // JPG/WebP compression quality (0 to 1)
-    const [watermarkText, setWatermarkText] = useState(''); // Text for the watermark
-    const [watermarkPosition, setWatermarkPosition] = useState('bottomRight'); // Position of the watermark
-    const [watermarkFontSize, setWatermarkFontSize] = useState(30); // Font size of the watermark
-    const [watermarkFontColor, setWatermarkFontColor] = useState('#FFFFFF'); // Font color of the watermark
-    const [watermarkOpacity, setWatermarkOpacity] = useState(0.7); // Opacity of the watermark
-    const [fileNamePrefix, setFileNamePrefix] = useState(''); // Prefix for converted file names
-    const [fileNameSuffix, setFileNameSuffix] = useState('-converted'); // Suffix for converted file names
-    const [isLoading, setIsLoading] = useState(false); // Loading state for conversion process
-    const [error, setError] = useState(''); // Error message
-    const [isDragOver, setIsDragOver] = useState(false); // State for drag-and-drop visual feedback
-    const [showAdvancedOptions, setShowAdvancedOptions] = useState(false); // New state to toggle advanced options visibility
-
-    const fileInputRef = useRef(null); // Ref for the hidden file input element
-    const convertedImagesRef = useRef(null); // Ref for the converted images section
-
-    // Function to handle file selection from input or drag-and-drop
-    const handleFileChange = async (e) => {
-        const files = Array.from(e.target.files || e.dataTransfer.files);
-        setError(''); // Clear any previous errors
-
-        const newFilesWithThumbnails = [];
-        for (const file of files) {
-            // Check if the file is an image
-            if (file.type.startsWith('image/')) {
-                try {
-                    const reader = new FileReader();
-                    const fileData = await new Promise((resolve, reject) => {
-                        reader.onload = (event) => resolve(event.target.result);
-                        reader.onerror = (event) => reject(new Error("ファイルの読み込みに失敗しました。"));
-                        reader.readAsDataURL(file);
-                    });
-
-                    const img = new Image();
-                    const imgLoad = await new Promise((resolve, reject) => {
-                        img.onload = () => resolve(img);
-                        img.onerror = () => reject(new Error("画像の読み込みに失敗しました。"));
-                        img.src = fileData;
-                    });
-
-                    newFilesWithThumbnails.push({
-                        file: file,
-                        thumbnailUrl: fileData,
-                        originalWidth: imgLoad.width,
-                        originalHeight: imgLoad.height,
-                    });
-                } catch (err) {
-                    console.error("サムネイル生成エラー:", err);
-                    // If thumbnail generation fails, still add the file, but without a thumbnail
-                    newFilesWithThumbnails.push({
-                        file: file,
-                        thumbnailUrl: null, // No thumbnail available
-                        originalWidth: null,
-                        originalHeight: null,
-                    });
-                    setError(`一部のファイルのサムネイル生成に失敗しました: ${file.name}`);
-                }
-            } else {
-                // If not an image, add the file without a thumbnail
-                newFilesWithThumbnails.push({
-                    file: file,
-                    thumbnailUrl: null,
-                    originalWidth: null,
-                    originalHeight: null,
-                });
-                setError(`画像ファイルではないため、${file.name} のサムネイルは表示されません。`);
-            }
-        }
-        setSelectedFiles(prevFiles => [...prevFiles, ...newFilesWithThumbnails]);
-    };
-
-    // Function to remove a file from the selected list
-    const removeFile = (index) => {
-        setSelectedFiles(prevFiles => prevFiles.filter((_, i) => i !== index));
-    };
-
-    // Function to handle drag over event for visual feedback
-    const handleDragOver = (e) => {
-        e.preventDefault();
-        setIsDragOver(true);
-    };
-
-    // Function to handle drag leave event
-    const handleDragLeave = (e) => {
-        e.preventDefault();
-        setIsDragOver(false);
-    };
-
-    // Function to handle drop event
-    const handleDrop = (e) => {
-        e.preventDefault();
-        setIsDragOver(false);
-        handleFileChange(e); // Process dropped files
-    };
-
-    // Function to trigger file input click
-    const triggerFileInput = () => {
-        fileInputRef.current.click();
-    };
-
-    // Function to clear all selected files and converted images
-    const clearAll = () => {
-        setSelectedFiles([]);
-        setConvertedImages([]);
-        setError('');
-        setIsLoading(false);
-    };
-
-    // Callback to update height when width changes, maintaining aspect ratio
-    const handleWidthChange = useCallback((e) => {
-        const newWidth = e.target.value;
-        setResizeWidth(newWidth);
-        // Use the dimensions of the first selected file for aspect ratio calculation
-        if (maintainAspectRatio && selectedFiles.length > 0 && selectedFiles[0].originalWidth && newWidth) {
-            const originalWidth = selectedFiles[0].originalWidth;
-            const originalHeight = selectedFiles[0].originalHeight;
-            setResizeHeight(Math.round((newWidth / originalWidth) * originalHeight));
-        }
-    }, [maintainAspectRatio, selectedFiles]);
-
-    // Callback to update width when height changes, maintaining aspect ratio
-    const handleHeightChange = useCallback((e) => {
-        const newHeight = e.target.value;
-        setResizeHeight(newHeight);
-        // Use the dimensions of the first selected file for aspect ratio calculation
-        if (maintainAspectRatio && selectedFiles.length > 0 && selectedFiles[0].originalWidth && newHeight) {
-            const originalWidth = selectedFiles[0].originalWidth;
-            const originalHeight = selectedFiles[0].originalHeight;
-            setResizeWidth(Math.round((newHeight / originalHeight) * originalWidth));
-        }
-    }, [maintainAspectRatio, selectedFiles]);
-
-    // Core function to convert images
-    const convertImages = async () => {
-        if (selectedFiles.length === 0) {
-            setError('変換する画像を選択してください。');
-            return;
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisioConvert 🖼️ 画像変換プロ 🔄</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React and ReactDOM CDNs -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel Standalone for in-browser JSX transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        /* Custom styles for range input thumbs */
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #3B82F6; /* Blue-500 */
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+            margin-top: -8px; /* Adjust to center thumb vertically */
         }
 
-        setIsLoading(true);
-        setConvertedImages([]); // Clear previous converted images
-        setError('');
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #3B82F6; /* Blue-500 */
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+        }
 
-        const newConvertedImages = [];
+        /* Ensure font-sans is applied */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center p-4">
+    <div id="root"></div>
 
-        for (const selectedFileItem of selectedFiles) { // Iterate over the new structure
-            const file = selectedFileItem.file; // Get the actual File object
-            try {
-                // Read the file as a Data URL
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
+    <script type="text/babel">
+        const { useState, useRef, useEffect, useCallback } = React;
+        const { createRoot } = ReactDOM;
 
-                await new Promise((resolve, reject) => {
-                    reader.onload = async (event) => {
-                        const img = new Image();
-                        img.onload = async () => {
-                            // Create a temporary canvas for image manipulation
-                            const canvas = document.createElement('canvas');
-                            const ctx = canvas.getContext('2d');
+        // Main App component
+        const App = () => {
+            // State variables for application data and UI
+            const [selectedFiles, setSelectedFiles] = useState([]); // Stores files selected by the user, now including thumbnail URLs and original dimensions
+            const [convertedImages, setConvertedImages] = useState([]); // Stores URLs of converted images
+            const [outputFormat, setOutputFormat] = useState('jpeg'); // 'jpeg', 'png', or 'webp'
+            const [resizeWidth, setResizeWidth] = useState(''); // Desired width for resizing
+            const [resizeHeight, setResizeHeight] = useState(''); // Desired height for resizing
+            const [maintainAspectRatio, setMaintainAspectRatio] = useState(true); // Flag to maintain aspect ratio during resize
+            const [compressionQuality, setCompressionQuality] = useState(0.8); // JPG/WebP compression quality (0 to 1)
+            const [watermarkText, setWatermarkText] = useState(''); // Text for the watermark
+            const [watermarkPosition, setWatermarkPosition] = useState('bottomRight'); // Position of the watermark
+            const [watermarkFontSize, setWatermarkFontSize] = useState(30); // Font size of the watermark
+            const [watermarkFontColor, setWatermarkFontColor] = useState('#FFFFFF'); // Font color of the watermark
+            const [watermarkOpacity, setWatermarkOpacity] = useState(0.7); // Opacity of the watermark
+            const [fileNamePrefix, setFileNamePrefix] = useState(''); // Prefix for converted file names
+            const [fileNameSuffix, setFileNameSuffix] = useState('-converted'); // Suffix for converted file names
+            const [isLoading, setIsLoading] = useState(false); // Loading state for conversion process
+            const [error, setError] = useState(''); // Error message
+            const [isDragOver, setIsDragOver] = useState(false); // State for drag-and-drop visual feedback
+            const [showAdvancedOptions, setShowAdvancedOptions] = useState(false); // New state to toggle advanced options visibility
 
-                            let currentWidth = img.width;
-                            let currentHeight = img.height;
+            const fileInputRef = useRef(null); // Ref for the hidden file input element
+            const convertedImagesRef = useRef(null); // Ref for the converted images section
 
-                            // Apply resizing if dimensions are provided and advanced options are shown
-                            if (showAdvancedOptions && (resizeWidth || resizeHeight)) {
-                                let targetWidth = resizeWidth ? parseInt(resizeWidth, 10) : img.width;
-                                let targetHeight = resizeHeight ? parseInt(resizeHeight, 10) : img.height;
+            // Function to handle file selection from input or drag-and-drop
+            const handleFileChange = async (e) => {
+                const files = Array.from(e.target.files || e.dataTransfer.files);
+                setError(''); // Clear any previous errors
 
-                                if (maintainAspectRatio) {
-                                    if (resizeWidth && !resizeHeight) {
-                                        targetHeight = (targetWidth / img.width) * img.height;
-                                    } else if (resizeHeight && !resizeWidth) {
-                                        targetWidth = (targetHeight / img.height) * img.width;
-                                    }
-                                }
-                                currentWidth = targetWidth;
-                                currentHeight = targetHeight;
-                            }
-
-                            canvas.width = currentWidth;
-                            canvas.height = currentHeight;
-
-                            // Draw image onto canvas
-                            ctx.drawImage(img, 0, 0, currentWidth, currentHeight);
-
-                            // Apply watermark if text is provided and advanced options are shown
-                            if (showAdvancedOptions && watermarkText) {
-                                ctx.font = `${watermarkFontSize}px Inter, sans-serif`; // Use Inter font
-                                ctx.fillStyle = watermarkFontColor;
-                                ctx.globalAlpha = watermarkOpacity;
-                                ctx.textAlign = 'left';
-                                ctx.textBaseline = 'top';
-
-                                const textMetrics = ctx.measureText(watermarkText);
-                                const textWidth = textMetrics.width;
-                                const textHeight = watermarkFontSize; // Approximate height
-
-                                let x, y;
-
-                                // Calculate watermark position
-                                switch (watermarkPosition) {
-                                    case 'topLeft':
-                                        x = 10;
-                                        y = 10;
-                                        break;
-                                    case 'topRight':
-                                        x = canvas.width - textWidth - 10;
-                                        y = 10;
-                                        break;
-                                    case 'bottomLeft':
-                                        x = 10;
-                                        y = canvas.height - textHeight - 10;
-                                        break;
-                                    case 'bottomRight':
-                                        x = canvas.width - textWidth - 10;
-                                        y = canvas.height - textHeight - 10;
-                                        break;
-                                    case 'center':
-                                        x = (canvas.width - textWidth) / 2;
-                                        y = (canvas.height - textHeight) / 2;
-                                        break;
-                                    default:
-                                        x = 10;
-                                        y = 10;
-                                }
-                                ctx.fillText(watermarkText, x, y);
-                                ctx.globalAlpha = 1.0; // Reset alpha
-                            }
-
-                            // Determine output MIME type and quality based on selected format
-                            let mimeType;
-                            let quality = showAdvancedOptions ? compressionQuality : 0.8; // Default quality if advanced options are hidden
-
-                            switch (outputFormat) {
-                                case 'jpeg':
-                                    mimeType = 'image/jpeg';
-                                    break;
-                                case 'png':
-                                    mimeType = 'image/png';
-                                    quality = undefined; // PNG doesn't use quality parameter
-                                    break;
-                                case 'webp':
-                                    mimeType = 'image/webp';
-                                    break;
-                                default:
-                                    mimeType = 'image/jpeg'; // Fallback
-                                    break;
-                            }
-
-                            const convertedDataUrl = canvas.toDataURL(mimeType, quality);
-
-                            // Construct the new file name
-                            const originalFileName = file.name.split('.').slice(0, -1).join('.');
-                            // Apply prefix/suffix only if advanced options are shown
-                            const newFileName = showAdvancedOptions
-                                ? `${fileNamePrefix}${originalFileName}${fileNameSuffix}.${outputFormat}`
-                                : `${originalFileName}.${outputFormat}`;
-
-                            newConvertedImages.push({
-                                name: newFileName,
-                                url: convertedDataUrl,
+                const newFilesWithThumbnails = [];
+                for (const file of files) {
+                    // Check if the file is an image
+                    if (file.type.startsWith('image/')) {
+                        try {
+                            const reader = new FileReader();
+                            const fileData = await new Promise((resolve, reject) => {
+                                reader.onload = (event) => resolve(event.target.result);
+                                reader.onerror = (event) => reject(new Error("ファイルの読み込みに失敗しました。"));
+                                reader.readAsDataURL(file);
                             });
-                            resolve();
-                        };
-                        img.onerror = () => {
-                            reject(new Error(`画像の読み込みに失敗しました: ${file.name}`));
-                        };
-                        img.src = event.target.result;
-                    };
-                    reader.onerror = () => {
-                        reject(new Error(`ファイルの読み込みに失敗しました: ${file.name}`));
-                    };
+
+                            const img = new Image();
+                            const imgLoad = await new Promise((resolve, reject) => {
+                                img.onload = () => resolve(img);
+                                img.onerror = () => reject(new Error("画像の読み込みに失敗しました。"));
+                                img.src = fileData;
+                            });
+
+                            newFilesWithThumbnails.push({
+                                file: file,
+                                thumbnailUrl: fileData,
+                                originalWidth: imgLoad.width,
+                                originalHeight: imgLoad.height,
+                            });
+                        } catch (err) {
+                            console.error("サムネイル生成エラー:", err);
+                            // If thumbnail generation fails, still add the file, but without a thumbnail
+                            newFilesWithThumbnails.push({
+                                file: file,
+                                thumbnailUrl: null, // No thumbnail available
+                                originalWidth: null,
+                                originalHeight: null,
+                            });
+                            setError(`一部のファイルのサムネイル生成に失敗しました: ${file.name}`);
+                        }
+                    } else {
+                        // If not an image, add the file without a thumbnail
+                        newFilesWithThumbnails.push({
+                            file: file,
+                            thumbnailUrl: null,
+                            originalWidth: null,
+                            originalHeight: null,
+                        });
+                        setError(`画像ファイルではないため、${file.name} のサムネイルは表示されません。`);
+                    }
+                }
+                setSelectedFiles(prevFiles => [...prevFiles, ...newFilesWithThumbnails]);
+            };
+
+            // Function to remove a file from the selected list
+            const removeFile = (index) => {
+                setSelectedFiles(prevFiles => prevFiles.filter((_, i) => i !== index));
+            };
+
+            // Function to handle drag over event for visual feedback
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setIsDragOver(true);
+            };
+
+            // Function to handle drag leave event
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+            };
+
+            // Function to handle drop event
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                handleFileChange(e); // Process dropped files
+            };
+
+            // Function to trigger file input click
+            const triggerFileInput = () => {
+                fileInputRef.current.click();
+            };
+
+            // Function to clear all selected files and converted images
+            const clearAll = () => {
+                setSelectedFiles([]);
+                setConvertedImages([]);
+                setError('');
+                setIsLoading(false);
+            };
+
+            // Callback to update height when width changes, maintaining aspect ratio
+            const handleWidthChange = useCallback((e) => {
+                const newWidth = e.target.value;
+                setResizeWidth(newWidth);
+                // Use the dimensions of the first selected file for aspect ratio calculation
+                if (maintainAspectRatio && selectedFiles.length > 0 && selectedFiles[0].originalWidth && newWidth) {
+                    const originalWidth = selectedFiles[0].originalWidth;
+                    const originalHeight = selectedFiles[0].originalHeight;
+                    setResizeHeight(Math.round((newWidth / originalWidth) * originalHeight));
+                }
+            }, [maintainAspectRatio, selectedFiles]);
+
+            // Callback to update width when height changes, maintaining aspect ratio
+            const handleHeightChange = useCallback((e) => {
+                const newHeight = e.target.value;
+                setResizeHeight(newHeight);
+                // Use the dimensions of the first selected file for aspect ratio calculation
+                if (maintainAspectRatio && selectedFiles.length > 0 && selectedFiles[0].originalWidth && newHeight) {
+                    const originalWidth = selectedFiles[0].originalWidth;
+                    const originalHeight = selectedFiles[0].originalHeight;
+                    setResizeWidth(Math.round((newHeight / originalHeight) * originalWidth));
+                }
+            }, [maintainAspectRatio, selectedFiles]);
+
+            // Core function to convert images
+            const convertImages = async () => {
+                if (selectedFiles.length === 0) {
+                    setError('変換する画像を選択してください。');
+                    return;
+                }
+
+                setIsLoading(true);
+                setConvertedImages([]); // Clear previous converted images
+                setError('');
+
+                const newConvertedImages = [];
+
+                for (const selectedFileItem of selectedFiles) { // Iterate over the new structure
+                    const file = selectedFileItem.file; // Get the actual File object
+                    try {
+                        // Read the file as a Data URL
+                        const reader = new FileReader();
+                        reader.readAsDataURL(file);
+
+                        await new Promise((resolve, reject) => {
+                            reader.onload = async (event) => {
+                                const img = new Image();
+                                img.onload = async () => {
+                                    // Create a temporary canvas for image manipulation
+                                    const canvas = document.createElement('canvas');
+                                    const ctx = canvas.getContext('2d');
+
+                                    let currentWidth = img.width;
+                                    let currentHeight = img.height;
+
+                                    // Apply resizing if dimensions are provided and advanced options are shown
+                                    if (showAdvancedOptions && (resizeWidth || resizeHeight)) {
+                                        let targetWidth = resizeWidth ? parseInt(resizeWidth, 10) : img.width;
+                                        let targetHeight = resizeHeight ? parseInt(resizeHeight, 10) : img.height;
+
+                                        if (maintainAspectRatio) {
+                                            if (resizeWidth && !resizeHeight) {
+                                                targetHeight = (targetWidth / img.width) * img.height;
+                                            } else if (resizeHeight && !resizeWidth) {
+                                                targetWidth = (targetHeight / img.height) * img.width;
+                                            }
+                                        }
+                                        currentWidth = targetWidth;
+                                        currentHeight = targetHeight;
+                                    }
+
+                                    canvas.width = currentWidth;
+                                    canvas.height = currentHeight;
+
+                                    // Draw image onto canvas
+                                    ctx.drawImage(img, 0, 0, currentWidth, currentHeight);
+
+                                    // Apply watermark if text is provided and advanced options are shown
+                                    if (showAdvancedOptions && watermarkText) {
+                                        ctx.font = `${watermarkFontSize}px Inter, sans-serif`; // Use Inter font
+                                        ctx.fillStyle = watermarkFontColor;
+                                        ctx.globalAlpha = watermarkOpacity;
+                                        ctx.textAlign = 'left';
+                                        ctx.textBaseline = 'top';
+
+                                        const textMetrics = ctx.measureText(watermarkText);
+                                        const textWidth = textMetrics.width;
+                                        const textHeight = watermarkFontSize; // Approximate height
+
+                                        let x, y;
+
+                                        // Calculate watermark position
+                                        switch (watermarkPosition) {
+                                            case 'topLeft':
+                                                x = 10;
+                                                y = 10;
+                                                break;
+                                            case 'topRight':
+                                                x = canvas.width - textWidth - 10;
+                                                y = 10;
+                                                break;
+                                            case 'bottomLeft':
+                                                x = 10;
+                                                y = canvas.height - textHeight - 10;
+                                                break;
+                                            case 'bottomRight':
+                                                x = canvas.width - textWidth - 10;
+                                                y = canvas.height - textHeight - 10;
+                                                break;
+                                            case 'center':
+                                                x = (canvas.width - textWidth) / 2;
+                                                y = (canvas.height - textHeight) / 2;
+                                                break;
+                                            default:
+                                                x = 10;
+                                                y = 10;
+                                        }
+                                        ctx.fillText(watermarkText, x, y);
+                                        ctx.globalAlpha = 1.0; // Reset alpha
+                                    }
+
+                                    // Determine output MIME type and quality based on selected format
+                                    let mimeType;
+                                    let quality = showAdvancedOptions ? compressionQuality : 0.8; // Default quality if advanced options are hidden
+
+                                    switch (outputFormat) {
+                                        case 'jpeg':
+                                            mimeType = 'image/jpeg';
+                                            break;
+                                        case 'png':
+                                            mimeType = 'image/png';
+                                            quality = undefined; // PNG doesn't use quality parameter
+                                            break;
+                                        case 'webp':
+                                            mimeType = 'image/webp';
+                                            break;
+                                        default:
+                                            mimeType = 'image/jpeg'; // Fallback
+                                            break;
+                                    }
+
+                                    const convertedDataUrl = canvas.toDataURL(mimeType, quality);
+
+                                    // Construct the new file name
+                                    const originalFileName = file.name.split('.').slice(0, -1).join('.');
+                                    // Apply prefix/suffix only if advanced options are shown
+                                    const newFileName = showAdvancedOptions
+                                        ? `${fileNamePrefix}${originalFileName}${fileNameSuffix}.${outputFormat}`
+                                        : `${originalFileName}.${outputFormat}`;
+
+                                    newConvertedImages.push({
+                                        name: newFileName,
+                                        url: convertedDataUrl,
+                                    });
+                                    resolve();
+                                };
+                                img.onerror = () => {
+                                    reject(new Error(`画像の読み込みに失敗しました: ${file.name}`));
+                                };
+                                img.src = event.target.result;
+                            };
+                            reader.onerror = () => {
+                                reject(new Error(`ファイルの読み込みに失敗しました: ${file.name}`));
+                            };
+                        });
+                    } catch (err) {
+                        console.error('変換エラー:', err);
+                        setError(`ファイルの変換中にエラーが発生しました ${file.name}: ${err.message}`);
+                    }
+                }
+                setConvertedImages(newConvertedImages);
+                setIsLoading(false);
+            };
+
+            // useEffect to scroll to converted images section when convertedImages state changes
+            useEffect(() => {
+                if (convertedImages.length > 0 && convertedImagesRef.current) {
+                    convertedImagesRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, [convertedImages]); // Dependency array includes convertedImages
+
+            // Function to download a single converted image
+            const downloadImage = (image) => {
+                const link = document.createElement('a');
+                link.href = image.url;
+                link.download = image.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // Function to download all converted images
+            const downloadAllImages = () => {
+                convertedImages.forEach(image => {
+                    downloadImage(image);
                 });
-            } catch (err) {
-                console.error('変換エラー:', err);
-                setError(`ファイルの変換中にエラーが発生しました ${file.name}: ${err.message}`);
-            }
-        }
-        setConvertedImages(newConvertedImages);
-        setIsLoading(false);
-    };
+            };
 
-    // useEffect to scroll to converted images section when convertedImages state changes
-    useEffect(() => {
-        if (convertedImages.length > 0 && convertedImagesRef.current) {
-            convertedImagesRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-    }, [convertedImages]); // Dependency array includes convertedImages
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center p-4 font-sans">
+                    <div className="bg-white shadow-2xl rounded-3xl p-8 w-full max-w-4xl transform transition-all duration-300 hover:scale-[1.005]">
+                        <h1 className="text-4xl font-extrabold text-center text-gray-800 mb-10 tracking-tight drop-shadow-md">
+                            VisioConvert 🖼️ 画像変換プロ 🔄
+                        </h1>
 
-    // Function to download a single converted image
-    const downloadImage = (image) => {
-        const link = document.createElement('a');
-        link.href = image.url;
-        link.download = image.name;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    };
-
-    // Function to download all converted images
-    const downloadAllImages = () => {
-        convertedImages.forEach(image => {
-            downloadImage(image);
-        });
-    };
-
-    return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center p-4 font-sans">
-            <div className="bg-white shadow-2xl rounded-3xl p-8 w-full max-w-4xl transform transition-all duration-300 hover:scale-[1.005]">
-                <h1 className="text-4xl font-extrabold text-center text-gray-800 mb-10 tracking-tight drop-shadow-md">
-                    VisioConvert 🖼️ 画像変換プロ 🔄
-                </h1>
-
-                {/* File Input Section */}
-                <div
-                    className={`border-4 border-dashed rounded-2xl p-10 mb-8 text-center transition-all duration-300
-                        ${isDragOver ? 'border-blue-500 bg-blue-50 shadow-inner' : 'border-indigo-300 bg-indigo-50 shadow-sm'}`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                >
-                    <input
-                        type="file"
-                        multiple
-                        accept="image/*"
-                        onChange={handleFileChange}
-                        ref={fileInputRef}
-                        className="hidden"
-                    />
-                    <p className="text-gray-700 text-lg mb-6">
-                        ここに画像をドラッグ＆ドロップするか、
-                    </p>
-                    <button
-                        onClick={triggerFileInput}
-                        className="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold text-xl rounded-full shadow-lg
-                                   hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-4 focus:ring-blue-300 focus:ring-offset-2
-                                   transition-all transform hover:scale-105 active:scale-95"
-                    >
-                        ファイルを選択
-                    </button>
-                </div>
-
-                {/* Selected Files Display */}
-                {selectedFiles.length > 0 && (
-                    <div className="mb-8 bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-inner">
-                        <h2 className="text-2xl font-bold text-gray-800 mb-4">選択中のファイル ({selectedFiles.length}件)</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-64 overflow-y-auto pr-2">
-                            {selectedFiles.map((item, index) => (
-                                <div key={index} className="flex flex-col items-center bg-white p-3 rounded-lg shadow-md border border-gray-100 relative group">
-                                    {item.thumbnailUrl ? (
-                                        <img
-                                            src={item.thumbnailUrl}
-                                            alt={item.file.name}
-                                            className="w-24 h-24 object-contain rounded-md mb-2 border border-gray-200"
-                                        />
-                                    ) : (
-                                        <div className="w-24 h-24 flex items-center justify-center bg-gray-200 rounded-md mb-2 text-gray-500 text-center text-sm">
-                                            プレビューなし<br/>(画像以外)
-                                        </div>
-                                    )}
-                                    <span className="text-gray-800 text-xs font-medium text-center w-full truncate px-1">{item.file.name}</span>
-                                    <button
-                                        onClick={() => removeFile(index)}
-                                        className="absolute top-1 right-1 text-red-500 bg-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-700 hover:scale-110"
-                                        title="ファイルを削除"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 11-2 0v6a1 1 0 112 0V8z" clipRule="evenodd" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Output Format */}
-                <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm mb-8">
-                    <label htmlFor="outputFormat" className="block text-gray-700 text-xl font-bold mb-3">
-                        出力形式
-                    </label>
-                    <select
-                        id="outputFormat"
-                        value={outputFormat}
-                        onChange={(e) => setOutputFormat(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                    >
-                        <option value="jpeg">JPG</option>
-                        <option value="png">PNG</option>
-                        <option value="webp">WebP</option> {/* Added WebP option */}
-                    </select>
-                </div>
-
-                {/* Toggle Advanced Options Button */}
-                <div className="text-center mb-8">
-                    <button
-                        onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-                        className="px-8 py-4 bg-gradient-to-r from-gray-700 to-gray-900 text-white font-bold text-lg rounded-full shadow-lg
-                                   hover:from-gray-800 hover:to-black focus:outline-none focus:ring-4 focus:ring-gray-400 focus:ring-offset-2
-                                   transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center mx-auto"
-                    >
-                        {showAdvancedOptions ? '高度な設定を隠す' : '高度な設定を表示'}
-                        <svg
-                            className={`ml-3 h-6 w-6 transform transition-transform duration-300 ${showAdvancedOptions ? 'rotate-180' : ''}`}
-                            xmlns="http://www.w3.org/2000/svg"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
+                        {/* File Input Section */}
+                        <div
+                            className={`border-4 border-dashed rounded-2xl p-10 mb-8 text-center transition-all duration-300
+                                ${isDragOver ? 'border-blue-500 bg-blue-50 shadow-inner' : 'border-indigo-300 bg-indigo-50 shadow-sm'}`}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
                         >
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                        </svg>
-                    </button>
-                </div>
-
-                {/* Advanced Options Section (Conditionally Rendered) */}
-                {showAdvancedOptions && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 transition-all duration-500 ease-in-out transform scale-y-100 origin-top">
-                        {/* Resize Options */}
-                        <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
-                            <label className="block text-gray-700 text-xl font-bold mb-3">
-                                リサイズ (px)
-                            </label>
-                            <div className="flex items-center space-x-4 mb-3">
-                                <input
-                                    type="number"
-                                    placeholder="幅"
-                                    value={resizeWidth}
-                                    onChange={handleWidthChange}
-                                    className="w-1/2 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                />
-                                <span className="text-gray-600 text-xl font-semibold">x</span>
-                                <input
-                                    type="number"
-                                    placeholder="高さ"
-                                    value={resizeHeight}
-                                    onChange={handleHeightChange}
-                                    className="w-1/2 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                />
-                            </div>
-                            <div className="flex items-center">
-                                <input
-                                    type="checkbox"
-                                    id="maintainAspectRatio"
-                                    checked={maintainAspectRatio}
-                                    onChange={(e) => setMaintainAspectRatio(e.target.checked)}
-                                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
-                                />
-                                <label htmlFor="maintainAspectRatio" className="ml-3 text-gray-700 text-base cursor-pointer">
-                                    縦横比を維持
-                                </label>
-                            </div>
-                        </div>
-
-                        {/* Compression Quality (JPG/WebP only) */}
-                        {(outputFormat === 'jpeg' || outputFormat === 'webp') && (
-                            <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
-                                <label htmlFor="compressionQuality" className="block text-gray-700 text-xl font-bold mb-3">
-                                    圧縮品質 ({outputFormat.toUpperCase()})
-                                </label>
-                                <input
-                                    type="range"
-                                    id="compressionQuality"
-                                    min="0"
-                                    max="1"
-                                    step="0.01"
-                                    value={compressionQuality}
-                                    onChange={(e) => setCompressionQuality(parseFloat(e.target.value))}
-                                    className="w-full h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer thumb-blue-500"
-                                    style={{
-                                        background: `linear-gradient(to right, #3B82F6 0%, #3B82F6 ${compressionQuality * 100}%, #D1D5DB ${compressionQuality * 100}%, #D1D5DB 100%)`
-                                    }}
-                                />
-                                <span className="text-base text-gray-600 mt-2 block">{Math.round(compressionQuality * 100)}%</span>
-                            </div>
-                        )}
-
-                        {/* Watermark Options */}
-                        <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
-                            <label htmlFor="watermarkText" className="block text-gray-700 text-xl font-bold mb-3">
-                                ウォーターマーク
-                            </label>
                             <input
-                                type="text"
-                                id="watermarkText"
-                                placeholder="ウォーターマークのテキスト"
-                                value={watermarkText}
-                                onChange={(e) => setWatermarkText(e.target.value)}
-                                className="w-full p-3 border border-gray-300 rounded-lg mb-3 focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                onChange={handleFileChange}
+                                ref={fileInputRef}
+                                className="hidden"
                             />
-                            <div className="grid grid-cols-2 gap-4 mb-3">
-                                <div>
-                                    <label htmlFor="watermarkFontSize" className="block text-gray-600 text-sm mb-1">フォントサイズ</label>
-                                    <input
-                                        type="number"
-                                        id="watermarkFontSize"
-                                        value={watermarkFontSize}
-                                        onChange={(e) => setWatermarkFontSize(parseInt(e.target.value, 10))}
-                                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label htmlFor="watermarkFontColor" className="block text-gray-600 text-sm mb-1">色</label>
-                                    <input
-                                        type="color"
-                                        id="watermarkFontColor"
-                                        value={watermarkFontColor}
-                                        onChange={(e) => setWatermarkFontColor(e.target.value)}
-                                        className="w-full h-12 border border-gray-300 rounded-lg cursor-pointer shadow-sm"
-                                    />
-                                </div>
-                            </div>
-                            <div className="mb-3">
-                                <label htmlFor="watermarkOpacity" className="block text-gray-600 text-sm mb-1">不透明度</label>
-                                <input
-                                    type="range"
-                                    id="watermarkOpacity"
-                                    min="0"
-                                    max="1"
-                                    step="0.01"
-                                    value={watermarkOpacity}
-                                    onChange={(e) => setWatermarkOpacity(parseFloat(e.target.value))}
-                                    className="w-full h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer thumb-blue-500"
-                                    style={{
-                                        background: `linear-gradient(to right, #3B82F6 0%, #3B82F6 ${watermarkOpacity * 100}%, #D1D5DB ${watermarkOpacity * 100}%, #D1D5DB 100%)`
-                                    }}
-                                />
-                                <span className="text-base text-gray-600 mt-2 block">{Math.round(watermarkOpacity * 100)}%</span>
-                            </div>
-                            <div>
-                                <label htmlFor="watermarkPosition" className="block text-gray-600 text-sm mb-1">位置</label>
-                                <select
-                                    id="watermarkPosition"
-                                    value={watermarkPosition}
-                                    onChange={(e) => setWatermarkPosition(e.target.value)}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                >
-                                    <option value="topLeft">左上</option>
-                                    <option value="topRight">右上</option>
-                                    <option value="bottomLeft">左下</option>
-                                    <option value="bottomRight">右下</option>
-                                    <option value="center">中央</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        {/* File Naming Options */}
-                        <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
-                            <label htmlFor="fileNamePrefix" className="block text-gray-700 text-xl font-bold mb-3">
-                                ファイル名設定
-                            </label>
-                            <div className="mb-3">
-                                <label htmlFor="fileNamePrefix" className="block text-gray-600 text-sm mb-1">ファイル名の先頭に追加</label>
-                                <input
-                                    type="text"
-                                    id="fileNamePrefix"
-                                    placeholder="例: my-image-"
-                                    value={fileNamePrefix}
-                                    onChange={(e) => setFileNamePrefix(e.target.value)}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor="fileNameSuffix" className="block text-gray-600 text-sm mb-1">ファイル名の末尾に追加</label>
-                                <input
-                                    type="text"
-                                    id="fileNameSuffix"
-                                    placeholder="例: -edited"
-                                    value={fileNameSuffix}
-                                    onChange={(e) => setFileNameSuffix(e.target.value)}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Action Buttons */}
-                <div className="flex justify-center space-x-6 mb-8 mt-10">
-                    <button
-                        onClick={convertImages}
-                        disabled={selectedFiles.length === 0 || isLoading}
-                        className={`px-10 py-5 rounded-full text-white font-bold text-2xl shadow-xl
-                                   ${selectedFiles.length === 0 || isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 focus:outline-none focus:ring-4 focus:ring-green-300 focus:ring-offset-2 transition-all transform hover:scale-105 active:scale-95'}`}
-                    >
-                        {isLoading ? (
-                            <div className="flex items-center">
-                                <svg className="animate-spin -ml-1 mr-3 h-7 w-7 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                変換中...
-                            </div>
-                        ) : (
-                            '画像を変換'
-                        )}
-                    </button>
-                    <button
-                        onClick={clearAll}
-                        className="px-8 py-4 bg-gradient-to-r from-red-500 to-pink-600 text-white font-semibold rounded-full shadow-lg
-                                   hover:from-red-600 hover:to-pink-700 focus:outline-none focus:ring-4 focus:ring-red-300 focus:ring-offset-2
-                                   transition-all transform hover:scale-105 active:scale-95"
-                    >
-                        すべてクリア
-                    </button>
-                </div>
-
-                {/* Error Message */}
-                {error && (
-                    <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg relative mb-8 shadow-md" role="alert">
-                        <p className="font-bold">エラーが発生しました:</p>
-                        <p className="text-sm">{error}</p>
-                    </div>
-                )}
-
-                {/* Converted Images Display */}
-                {convertedImages.length > 0 && (
-                    <div ref={convertedImagesRef} className="mt-10 bg-blue-50 p-8 rounded-2xl border border-blue-200 shadow-xl">
-                        <h2 className="text-3xl font-bold text-blue-800 mb-6 text-center">変換済み画像</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {convertedImages.map((image, index) => (
-                                <div key={index} className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200 transform transition-all duration-200 hover:scale-[1.02]">
-                                    <img
-                                        src={image.url}
-                                        alt={image.name}
-                                        className="w-full h-48 object-contain bg-gray-100 border-b border-gray-200 p-2"
-                                    />
-                                    <div className="p-4">
-                                        <p className="text-gray-800 font-medium text-base mb-3 truncate">{image.name}</p>
-                                        <button
-                                            onClick={() => downloadImage(image)}
-                                            className="w-full px-4 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold rounded-lg
-                                                       hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2
-                                                       transition-all transform hover:scale-105 active:scale-95 text-base shadow-md"
-                                        >
-                                            ダウンロード
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="text-center mt-8">
+                            <p className="text-gray-700 text-lg mb-6">
+                                ここに画像をドラッグ＆ドロップするか、
+                            </p>
                             <button
-                                onClick={downloadAllImages}
-                                className="px-10 py-4 bg-gradient-to-r from-indigo-600 to-blue-700 text-white font-bold rounded-full shadow-xl
-                                           hover:from-indigo-700 hover:to-blue-800 focus:outline-none focus:ring-4 focus:ring-indigo-300 focus:ring-offset-2
-                                           transition-all transform hover:scale-105 active:scale-95 text-xl"
+                                onClick={triggerFileInput}
+                                className="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold text-xl rounded-full shadow-lg
+                                           hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-4 focus:ring-blue-300 focus:ring-offset-2
+                                           transition-all transform hover:scale-105 active:scale-95"
                             >
-                                すべてダウンロード
+                                ファイルを選択
                             </button>
                         </div>
+
+                        {/* Selected Files Display */}
+                        {selectedFiles.length > 0 && (
+                            <div className="mb-8 bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-inner">
+                                <h2 className="text-2xl font-bold text-gray-800 mb-4">選択中のファイル ({selectedFiles.length}件)</h2>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-64 overflow-y-auto pr-2">
+                                    {selectedFiles.map((item, index) => (
+                                        <div key={index} className="flex flex-col items-center bg-white p-3 rounded-lg shadow-md border border-gray-100 relative group">
+                                            {item.thumbnailUrl ? (
+                                                <img
+                                                    src={item.thumbnailUrl}
+                                                    alt={item.file.name}
+                                                    className="w-24 h-24 object-contain rounded-md mb-2 border border-gray-200"
+                                                />
+                                            ) : (
+                                                <div className="w-24 h-24 flex items-center justify-center bg-gray-200 rounded-md mb-2 text-gray-500 text-center text-sm">
+                                                    プレビューなし<br/>(画像以外)
+                                                </div>
+                                            )}
+                                            <span className="text-gray-800 text-xs font-medium text-center w-full truncate px-1">{item.file.name}</span>
+                                            <button
+                                                onClick={() => removeFile(index)}
+                                                className="absolute top-1 right-1 text-red-500 bg-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-700 hover:scale-110"
+                                                title="ファイルを削除"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 11-2 0v6a1 1 0 112 0V8z" clipRule="evenodd" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Output Format */}
+                        <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm mb-8">
+                            <label htmlFor="outputFormat" className="block text-gray-700 text-xl font-bold mb-3">
+                                出力形式
+                            </label>
+                            <select
+                                id="outputFormat"
+                                value={outputFormat}
+                                onChange={(e) => setOutputFormat(e.target.value)}
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                            >
+                                <option value="jpeg">JPG</option>
+                                <option value="png">PNG</option>
+                                <option value="webp">WebP</option> {/* Added WebP option */}
+                            </select>
+                        </div>
+
+                        {/* Toggle Advanced Options Button */}
+                        <div className="text-center mb-8">
+                            <button
+                                onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                                className="px-8 py-4 bg-gradient-to-r from-gray-700 to-gray-900 text-white font-bold text-lg rounded-full shadow-lg
+                                           hover:from-gray-800 hover:to-black focus:outline-none focus:ring-4 focus:ring-gray-400 focus:ring-offset-2
+                                           transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center mx-auto"
+                            >
+                                {showAdvancedOptions ? '高度な設定を隠す' : '高度な設定を表示'}
+                                <svg
+                                    className={`ml-3 h-6 w-6 transform transition-transform duration-300 ${showAdvancedOptions ? 'rotate-180' : ''}`}
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        {/* Advanced Options Section (Conditionally Rendered) */}
+                        {showAdvancedOptions && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 transition-all duration-500 ease-in-out transform scale-y-100 origin-top">
+                                {/* Resize Options */}
+                                <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
+                                    <label className="block text-gray-700 text-xl font-bold mb-3">
+                                        リサイズ (px)
+                                    </label>
+                                    <div className="flex items-center space-x-4 mb-3">
+                                        <input
+                                            type="number"
+                                            placeholder="幅"
+                                            value={resizeWidth}
+                                            onChange={handleWidthChange}
+                                            className="w-1/2 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                        />
+                                        <span className="text-gray-600 text-xl font-semibold">x</span>
+                                        <input
+                                            type="number"
+                                            placeholder="高さ"
+                                            value={resizeHeight}
+                                            onChange={handleHeightChange}
+                                            className="w-1/2 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                        />
+                                    </div>
+                                    <div className="flex items-center">
+                                        <input
+                                            type="checkbox"
+                                            id="maintainAspectRatio"
+                                            checked={maintainAspectRatio}
+                                            onChange={(e) => setMaintainAspectRatio(e.target.checked)}
+                                            className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                                        />
+                                        <label htmlFor="maintainAspectRatio" className="ml-3 text-gray-700 text-base cursor-pointer">
+                                            縦横比を維持
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {/* Compression Quality (JPG/WebP only) */}
+                                {(outputFormat === 'jpeg' || outputFormat === 'webp') && (
+                                    <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
+                                        <label htmlFor="compressionQuality" className="block text-gray-700 text-xl font-bold mb-3">
+                                            圧縮品質 ({outputFormat.toUpperCase()})
+                                        </label>
+                                        <input
+                                            type="range"
+                                            id="compressionQuality"
+                                            min="0"
+                                            max="1"
+                                            step="0.01"
+                                            value={compressionQuality}
+                                            onChange={(e) => setCompressionQuality(parseFloat(e.target.value))}
+                                            className="w-full h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer thumb-blue-500"
+                                            style={{
+                                                background: `linear-gradient(to right, #3B82F6 0%, #3B82F6 ${compressionQuality * 100}%, #D1D5DB ${compressionQuality * 100}%, #D1D5DB 100%)`
+                                            }}
+                                        />
+                                        <span className="text-base text-gray-600 mt-2 block">{Math.round(compressionQuality * 100)}%</span>
+                                    </div>
+                                )}
+
+                                {/* Watermark Options */}
+                                <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
+                                    <label htmlFor="watermarkText" className="block text-gray-700 text-xl font-bold mb-3">
+                                        ウォーターマーク
+                                    </label>
+                                    <input
+                                        type="text"
+                                        id="watermarkText"
+                                        placeholder="ウォーターマークのテキスト"
+                                        value={watermarkText}
+                                        onChange={(e) => setWatermarkText(e.target.value)}
+                                        className="w-full p-3 border border-gray-300 rounded-lg mb-3 focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                    />
+                                    <div className="grid grid-cols-2 gap-4 mb-3">
+                                        <div>
+                                            <label htmlFor="watermarkFontSize" className="block text-gray-600 text-sm mb-1">フォントサイズ</label>
+                                            <input
+                                                type="number"
+                                                id="watermarkFontSize"
+                                                value={watermarkFontSize}
+                                                onChange={(e) => setWatermarkFontSize(parseInt(e.target.value, 10))}
+                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="watermarkFontColor" className="block text-gray-600 text-sm mb-1">色</label>
+                                            <input
+                                                type="color"
+                                                id="watermarkFontColor"
+                                                value={watermarkFontColor}
+                                                onChange={(e) => setWatermarkFontColor(e.target.value)}
+                                                className="w-full h-12 border border-gray-300 rounded-lg cursor-pointer shadow-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="mb-3">
+                                        <label htmlFor="watermarkOpacity" className="block text-gray-600 text-sm mb-1">不透明度</label>
+                                        <input
+                                            type="range"
+                                            id="watermarkOpacity"
+                                            min="0"
+                                            max="1"
+                                            step="0.01"
+                                            value={watermarkOpacity}
+                                            onChange={(e) => setWatermarkOpacity(parseFloat(e.target.value))}
+                                            className="w-full h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer thumb-blue-500"
+                                            style={{
+                                                background: `linear-gradient(to right, #3B82F6 0%, #3B82F6 ${watermarkOpacity * 100}%, #D1D5DB ${watermarkOpacity * 100}%, #D1D5DB 100%)`
+                                            }}
+                                        />
+                                        <span className="text-base text-gray-600 mt-2 block">{Math.round(watermarkOpacity * 100)}%</span>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="watermarkPosition" className="block text-gray-600 text-sm mb-1">位置</label>
+                                        <select
+                                            id="watermarkPosition"
+                                            value={watermarkPosition}
+                                            onChange={(e) => setWatermarkPosition(e.target.value)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                        >
+                                            <option value="topLeft">左上</option>
+                                            <option value="topRight">右上</option>
+                                            <option value="bottomLeft">左下</option>
+                                            <option value="bottomRight">右下</option>
+                                            <option value="center">中央</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                {/* File Naming Options */}
+                                <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
+                                    <label htmlFor="fileNamePrefix" className="block text-gray-700 text-xl font-bold mb-3">
+                                        ファイル名設定
+                                    </label>
+                                    <div className="mb-3">
+                                        <label htmlFor="fileNamePrefix" className="block text-gray-600 text-sm mb-1">ファイル名の先頭に追加</label>
+                                        <input
+                                            type="text"
+                                            id="fileNamePrefix"
+                                            placeholder="例: my-image-"
+                                            value={fileNamePrefix}
+                                            onChange={(e) => setFileNamePrefix(e.target.value)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="fileNameSuffix" className="block text-gray-600 text-sm mb-1">ファイル名の末尾に追加</label>
+                                        <input
+                                            type="text"
+                                            id="fileNameSuffix"
+                                            placeholder="例: -edited"
+                                            value={fileNameSuffix}
+                                            onChange={(e) => setFileNameSuffix(e.target.value)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-lg shadow-sm"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action Buttons */}
+                        <div className="flex justify-center space-x-6 mb-8 mt-10">
+                            <button
+                                onClick={convertImages}
+                                disabled={selectedFiles.length === 0 || isLoading}
+                                className={`px-10 py-5 rounded-full text-white font-bold text-2xl shadow-xl
+                                           ${selectedFiles.length === 0 || isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 focus:outline-none focus:ring-4 focus:ring-green-300 focus:ring-offset-2 transition-all transform hover:scale-105 active:scale-95'}`}
+                            >
+                                {isLoading ? (
+                                    <div className="flex items-center">
+                                        <svg className="animate-spin -ml-1 mr-3 h-7 w-7 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        変換中...
+                                    </div>
+                                ) : (
+                                    '画像を変換'
+                                )}
+                            </button>
+                            <button
+                                onClick={clearAll}
+                                className="px-8 py-4 bg-gradient-to-r from-red-500 to-pink-600 text-white font-semibold rounded-full shadow-lg
+                                           hover:from-red-600 hover:to-pink-700 focus:outline-none focus:ring-4 focus:ring-red-300 focus:ring-offset-2
+                                           transition-all transform hover:scale-105 active:scale-95"
+                            >
+                                すべてクリア
+                            </button>
+                        </div>
+
+                        {/* Error Message */}
+                        {error && (
+                            <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg relative mb-8 shadow-md" role="alert">
+                                <p className="font-bold">エラーが発生しました:</p>
+                                <p className="text-sm">{error}</p>
+                            </div>
+                        )}
+
+                        {/* Converted Images Display */}
+                        {convertedImages.length > 0 && (
+                            <div ref={convertedImagesRef} className="mt-10 bg-blue-50 p-8 rounded-2xl border border-blue-200 shadow-xl">
+                                <h2 className="text-3xl font-bold text-blue-800 mb-6 text-center">変換済み画像</h2>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {convertedImages.map((image, index) => (
+                                        <div key={index} className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200 transform transition-all duration-200 hover:scale-[1.02]">
+                                            <img
+                                                src={image.url}
+                                                alt={image.name}
+                                                className="w-full h-48 object-contain bg-gray-100 border-b border-gray-200 p-2"
+                                            />
+                                            <div className="p-4">
+                                                <p className="text-gray-800 font-medium text-base mb-3 truncate">{image.name}</p>
+                                                <button
+                                                    onClick={() => downloadImage(image)}
+                                                    className="w-full px-4 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold rounded-lg
+                                                               hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2
+                                                               transition-all transform hover:scale-105 active:scale-95 text-base shadow-md"
+                                                >
+                                                    ダウンロード
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="text-center mt-8">
+                                    <button
+                                        onClick={downloadAllImages}
+                                        className="px-10 py-4 bg-gradient-to-r from-indigo-600 to-blue-700 text-white font-bold rounded-full shadow-xl
+                                                   hover:from-indigo-700 hover:to-blue-800 focus:outline-none focus:ring-4 focus:ring-indigo-300 focus:ring-offset-2
+                                                   transition-all transform hover:scale-105 active:scale-95 text-xl"
+                                    >
+                                        すべてダウンロード
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <p className="text-center text-gray-600 text-sm mt-10 opacity-80">
+                            注: このアプリはブラウザのネイティブ機能を利用しているため、HEICや一部のRAWファイルなど、ブラウザが直接サポートしていない特殊なコーデックの変換には対応していません。
+                        </p>
                     </div>
-                )}
+                </div>
+            );
+        };
 
-                <p className="text-center text-gray-600 text-sm mt-10 opacity-80">
-                    注: このアプリはブラウザのネイティブ機能を利用しているため、HEICや一部のRAWファイルなど、ブラウザが直接サポートしていない特殊なコーデックの変換には対応していません。
-                </p>
-            </div>
-        </div>
-    );
-};
-
-export default App;
+        // Render the App component into the root div
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
